@@ -1,0 +1,30 @@
+# =========================
+# 🔐 Variáveis de ambiente
+# =========================
+.env
+*.env
+
+# =========================
+# 📦 Dependências
+# =========================
+node_modules/
+
+# =========================
+# 🚀 Build
+# =========================
+dist/
+.vite/
+.cache/
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# =========================
+# 🧠 IDEs
+# =========================
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,6 @@
+/* App-level styles — most things live in index.css design tokens */
+#root {
+  min-height: 100vh;
+  position: relative;
+  z-index: 1;
+}
