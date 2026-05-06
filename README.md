@@ -1,10 +1,4 @@
 
-Generate unified monorepo README.md
-
-Generate unified monorepo README.md
-bash
-
-cat > /mnt/user-data/outputs/README-monorepo.md << 'MDEOF'
 <div align="center">
 
 # SGF — Sistema de Gestão de Fiscalização
@@ -575,6 +569,4 @@ A página de vistorias agrega dados de múltiplas obras em paralelo. `Promise.al
 `br.leetjourney` · PROVIC · UCSAL · SGF v5.0 + Dashboard v10.0
 
 </div>
-MDEOF
 
-echo "README monorepo: $(wc -l < /mnt/user-data/outputs/README-monorepo.md) linhas"
