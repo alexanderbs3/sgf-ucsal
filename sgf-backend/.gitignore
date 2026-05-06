@@ -1,0 +1,32 @@
+# =========================
+# 🔐 Variáveis de ambiente
+# =========================
+.env
+*.env
+
+# =========================
+# 📦 Build (Maven/Gradle)
+# =========================
+target/
+build/
+*.class
+*.jar
+*.war
+*.ear
+
+# logs
+*.log
+
+# =========================
+# 🧠 IDEs
+# =========================
+.idea/
+*.iml
+.project
+.classpath
+.settings/
+
+# =========================
+# 🧪 Testes / cobertura
+# =========================
+coverage/

@@ -1,0 +1,6 @@
+obra(id PK, nome, localizacao, status, responsavel_tecnico, data_inicio, data_fim)
+item(id PK, descricao, obra_id FK→obra, classificacao_id FK→classificacao, origem_dado_id FK→origem_dado)
+classificacao(id PK, classe, descricao)
+origem_dado(id PK, nome, descricao)
+usuario(id PK, nome, email, senha, perfil)
+log_fiscalizacao(id PK, item_id FK→item, usuario_id FK→usuario, data_hora, resultado, observacao)

@@ -1,0 +1,47 @@
+spring:
+  application:
+    name: sgf-backend
+
+  docker:
+    compose:
+      enabled: false   # evita erro quando o docker-compose.yml não está no working directory do IntelliJ
+
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:sgf_db}
+    username: ${DB_USER:root}
+    password: ${DB_PASSWORD:root}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: true
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: true
+        id.new_generator_mappings: true
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    baseline-version: 0
+    out-of-order: false
+
+server:
+  port: ${APP_PORT:8080}
+
+# ── JWT ────────────────────────────────────────────────────────────────────────
+# Em produção: sobrescreva sgf.jwt.secret com uma variável de ambiente segura
+# de no mínimo 32 caracteres. Nunca commite o valor real no repositório.
+sgf:
+  jwt:
+    secret: ${JWT_SECRET:sgf-default-dev-secret-change-in-production-min32chars}
+    expiracao-ms: ${JWT_EXPIRACAO_MS:86400000}  # 24h
+
+logging:
+  level:
+    br.leetjourney.sgf_backend: DEBUG
+    org.springframework.web: INFO
+    org.flywaydb: INFO
