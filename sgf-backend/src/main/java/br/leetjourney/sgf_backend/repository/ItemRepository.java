@@ -65,4 +65,14 @@ public interface ItemRepository extends JpaRepository<Item, UUID> {
 
     /** Contagem de itens por status para uma obra (projeção leve). */
     long countByObraIdAndStatus(UUID obraId, StatusItem status);
+
+    /** Contagem total de itens de uma obra. */
+    long countByObraId(UUID obraId);
+
+    /**
+     * Contagem de itens por classe (A, B, C) para uma obra.
+     * CORREÇÃO: substitui o stream em memória do dashboard por uma query SQL direta.
+     */
+    @Query("SELECT COUNT(i) FROM Item i WHERE i.obra.id = :obraId AND i.classificacao.tipo = :tipo")
+    long countByObraIdAndClassificacaoTipo(@Param("obraId") UUID obraId, @Param("tipo") char tipo);
 }

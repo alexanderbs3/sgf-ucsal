@@ -1,5 +1,6 @@
 package br.leetjourney.sgf_backend.security;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -18,52 +19,63 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+import java.util.Arrays;
 import java.util.List;
 
 /**
- * Configuração central do Spring Security.
+ * Configuração central do Spring Security — v6.0
  *
- * Estratégia (portfólio):
- * - Stateless (JWT) — sem sessão HTTP
- * - CSRF desabilitado — desnecessário em APIs REST stateless
- * - Rotas públicas: /auth/** e leituras básicas para o frontend inicial
- * - Rotas protegidas: mutações (POST/PUT/PATCH/DELETE) exigem JWT
- * - Roles mapeadas: ADMIN > GESTOR > FISCAL
- *
- * Em produção real: usar HTTPS obrigatório + rate limiting no /auth/login.
+ * CORREÇÕES v6 (auditoria):
+ * 1. CORS restrito: allowedOriginPatterns("*") substituído por lista de origens
+ *    configuráveis via variável de ambiente CORS_ALLOWED_ORIGINS.
+ * 2. Rate limiting injetado como filtro antes do JwtAuthFilter.
+ * 3. @PreAuthorize habilitado via @EnableMethodSecurity para defesa em profundidade.
+ * 4. /auth/definir-senha removido das rotas públicas — agora exige ADMIN.
  */
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity
 public class SecurityConfig {
 
-    private final JwtAuthFilter jwtAuthFilter;
+    private final JwtAuthFilter   jwtAuthFilter;
+    private final RateLimitFilter rateLimitFilter;
 
-    public SecurityConfig(JwtAuthFilter jwtAuthFilter) {
-        this.jwtAuthFilter = jwtAuthFilter;
+    /**
+     * Origens CORS permitidas — configuradas via variável de ambiente.
+     * Padrão de desenvolvimento: apenas o servidor Vite local.
+     * Em produção: definir CORS_ALLOWED_ORIGINS com o domínio real do frontend.
+     */
+    @Value("${sgf.cors.allowed-origins:http://localhost:5173}")
+    private String corsAllowedOrigins;
+
+    public SecurityConfig(JwtAuthFilter jwtAuthFilter, RateLimitFilter rateLimitFilter) {
+        this.jwtAuthFilter   = jwtAuthFilter;
+        this.rateLimitFilter = rateLimitFilter;
     }
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
-            // CSRF desnecessário para APIs REST stateless
             .csrf(AbstractHttpConfigurer::disable)
-
-            // CORS via CorsConfigurationSource abaixo
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
-
-            // Sem sessão HTTP — JWT é stateless
             .sessionManagement(sm ->
                 sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
 
             .authorizeHttpRequests(auth -> auth
 
-                // ── Rotas públicas ─────────────────────────────────────────
-                .requestMatchers("/auth/**").permitAll()
+                // ── Rotas totalmente públicas ───────────────────────────────
+                .requestMatchers("/auth/login").permitAll()
 
-                // Leitura pública de lookups (para popular selects no frontend)
+                // CORREÇÃO: /auth/definir-senha NÃO é mais público.
+                // Agora exige autenticação como ADMIN (veja AuthController).
+                // /auth/me exige JWT válido.
+
+                // Lookups públicos (para popular selects no frontend sem login)
                 .requestMatchers(HttpMethod.GET, "/classificacoes/**").permitAll()
                 .requestMatchers(HttpMethod.GET, "/origens-dado/**").permitAll()
+
+                // ── Auth protegido ──────────────────────────────────────────
+                .requestMatchers("/auth/**").authenticated()
 
                 // ── Obras ───────────────────────────────────────────────────
                 .requestMatchers(HttpMethod.GET, "/obras/**").authenticated()
@@ -83,25 +95,22 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/vistorias/**").authenticated()
                 .requestMatchers(HttpMethod.POST, "/vistorias").hasAnyRole("ADMIN", "GESTOR", "FISCAL")
 
-                // ── Logs de fiscalização ────────────────────────────────────
+                // ── Logs ────────────────────────────────────────────────────
                 .requestMatchers(HttpMethod.GET, "/logs/**").authenticated()
                 .requestMatchers(HttpMethod.POST, "/logs").hasAnyRole("ADMIN", "GESTOR", "FISCAL")
 
                 // ── Usuários ────────────────────────────────────────────────
-                // Listar: qualquer autenticado (para popular selects de fiscal)
-                .requestMatchers(HttpMethod.GET, "/usuarios").authenticated()
                 .requestMatchers(HttpMethod.GET, "/usuarios/**").authenticated()
-                // CRUD: apenas Admin
                 .requestMatchers(HttpMethod.POST, "/usuarios").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/usuarios/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.PATCH, "/usuarios/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.DELETE, "/usuarios/**").hasRole("ADMIN")
 
-                // Qualquer outra rota exige autenticação
                 .anyRequest().authenticated()
             )
 
-            // Injeta o filtro JWT antes do filtro padrão de username/password
+            // Rate limiting antes do JWT (protege o endpoint de login de brute force)
+            .addFilterBefore(rateLimitFilter, UsernamePasswordAuthenticationFilter.class)
             .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
@@ -109,7 +118,6 @@ public class SecurityConfig {
 
     @Bean
     public PasswordEncoder passwordEncoder() {
-        // BCrypt com força 12 (padrão recomendado — ~250ms por hash)
         return new BCryptPasswordEncoder(12);
     }
 
@@ -120,16 +128,23 @@ public class SecurityConfig {
     }
 
     /**
-     * CORS configurado aqui em vez de WebMvcConfigurer separado,
-     * para garantir que o Spring Security também aplique o CORS
-     * antes de rejeitar requisições preflight (OPTIONS).
+     * CORREÇÃO: CORS restrito a origens configuradas via variável de ambiente.
+     * Substituição de allowedOriginPatterns("*") que aceitava qualquer origem.
      */
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOriginPatterns(List.of("*"));
+
+        // Parse de lista separada por vírgula: "http://app.gov.br,http://localhost:5173"
+        List<String> origens = Arrays.stream(corsAllowedOrigins.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isBlank())
+                .toList();
+        config.setAllowedOrigins(origens);
+
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        config.setAllowedHeaders(List.of("*"));
+        config.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept"));
+        config.setExposedHeaders(List.of("Authorization"));
         config.setAllowCredentials(false);
         config.setMaxAge(3600L);
 

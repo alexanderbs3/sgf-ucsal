@@ -39,6 +39,11 @@ sgf:
   jwt:
     secret: ${JWT_SECRET:sgf-default-dev-secret-change-in-production-min32chars}
     expiracao-ms: ${JWT_EXPIRACAO_MS:86400000}  # 24h
+  cors:
+    # CORREÇÃO v6: origens CORS restritas por variável de ambiente.
+    # Em produção: CORS_ALLOWED_ORIGINS=https://sgf.prefeitura.gov.br
+    # Em dev: valor padrão permite apenas o Vite local.
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173}
 
 logging:
   level:

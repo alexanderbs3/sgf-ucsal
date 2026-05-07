@@ -1,554 +1,276 @@
-# SGF Backend — Sistema de Gestão de Fiscalização
+# SGF — Sistema de Gestão de Fiscalização
 
-> **Versão:** 5.0.0 · **Runtime:** Java 21 · **Framework:** Spring Boot 3.4.5 · **Banco:** PostgreSQL 16
-
-API REST para gestão e fiscalização de obras públicas municipais. Construída com arquitetura em camadas (Controller → Service → Repository), autenticação JWT stateless, migrações versionadas com Flyway e controle de acesso baseado em papéis (RBAC).
-
----
-
-## Sumário
-
-1. [Visão Geral](#visão-geral)
-2. [Stack Técnica](#stack-técnica)
-3. [Estrutura de Pacotes](#estrutura-de-pacotes)
-4. [Modelo de Domínio](#modelo-de-domínio)
-5. [Autenticação e Autorização](#autenticação-e-autorização)
-6. [Endpoints da API](#endpoints-da-api)
-7. [Migrações Flyway](#migrações-flyway)
-8. [Configuração e Variáveis de Ambiente](#configuração-e-variáveis-de-ambiente)
-9. [Como Executar](#como-executar)
-10. [Primeiros Passos Após o Deploy](#primeiros-passos-após-o-deploy)
-11. [Regras de Negócio](#regras-de-negócio)
-12. [Decisões Arquiteturais](#decisões-arquiteturais)
+> Backend da plataforma de inteligência de dados aplicada à fiscalização de obras públicas.
+> Desenvolvido como projeto de Iniciação Científica — PROVIC/UCSAL.
 
 ---
 
-## Visão Geral
+## Sobre o Projeto
 
-O SGF Backend gerencia o ciclo completo de fiscalização de obras públicas:
+O SGF transforma registros brutos de fiscalização de obras públicas em indicadores interpretáveis para apoiar decisões técnicas baseadas em evidência. O sistema responde perguntas como:
 
-- **Obras** são criadas com código único e passam por um fluxo controlado de status.
-- Cada obra contém **Itens** classificados por critério de criticidade (A, B ou C).
-- **Fiscais** realizam **Vistorias** vinculadas a obras, registrando o resultado de cada item em **Logs de Fiscalização**.
-- Todo acesso é protegido por **JWT** com controle de permissões por papel (`ADMIN`, `GESTOR`, `FISCAL`).
+- Quais itens de uma obra demandam atenção prioritária?
+- Como a classificação ABC distribui o esforço de vistoria ao longo do tempo?
+- Qual é a evolução histórica de cada item fiscalizado?
+
+**Orientando:** Alexander Costa Brasiliano Silva
+**Orientador:** Prof. Eng. Me. Rafael Bispo
+**Instituição:** UCSAL — Universidade Católica do Salvador
+**Programa:** PROVIC — Iniciação Científica
+
 
 ---
 
-## Stack Técnica
+## Stack
 
 | Camada | Tecnologia |
-|---|---|
-| Linguagem | Java 21 (LTS) |
-| Framework | Spring Boot 3.4.5 |
-| Segurança | Spring Security 6 + JJWT 0.12.6 |
-| Persistência | Spring Data JPA + Hibernate |
-| Banco de Dados | PostgreSQL 16 |
-| Migrações | Flyway 10 |
-| Validação | Jakarta Bean Validation |
-| Redução de boilerplate | Lombok |
-| Build | Maven 3 |
+|--------|-----------|
+| Linguagem | Java 21 |
+| Framework | Spring Boot 4.0.5 |
+| ORM | Hibernate 7.x / Spring Data JPA |
+| Banco de dados | PostgreSQL 16 |
+| Migrations | Flyway |
+| Containerização | Docker / Docker Compose |
+| Validação | Jakarta Bean Validation 3.1 |
+| Logging | SLF4J / Logback |
+| Build | Maven |
 
 ---
 
-## Estrutura de Pacotes
+## Como Executar Localmente
 
+### Pré-requisitos
+
+- Java 21
+- Maven
+- Docker e Docker Compose
+
+### 1. Clonar o repositório
+
+```bash
+git clone <url-do-repositorio>
+cd sgf-backend
 ```
-br.leetjourney.sgf_backend
-├── controller/           # Camada HTTP — recebe requests, delega ao service
-│   ├── AuthController
-│   ├── ObraController
-│   ├── ItemController
-│   ├── VistoriaController
-│   ├── LogFiscalizacaoController
-│   ├── UsuarioController
-│   ├── ClassificacaoController
-│   └── OrigemDadoController
-│
-├── service/              # Regras de negócio e orquestração
-│   ├── AuthService
-│   ├── ObraService
-│   ├── ItemService
-│   ├── VistoriaService
-│   ├── LogFiscalizacaoService
-│   └── UsuarioService
-│
-├── repository/           # Spring Data JPA — acesso ao banco
-│
-├── model/                # Entidades JPA
-│   ├── Obra
-│   ├── Item
-│   ├── Vistoria
-│   ├── LogFiscalizacao
-│   ├── Usuario
-│   ├── Classificacao
-│   ├── OrigemDado
-│   ├── StatusObra        (enum)
-│   ├── StatusItem        (enum)
-│   └── PapelUsuario      (enum)
-│
-├── dto/
-│   ├── request/          # Payloads de entrada (validados com @Valid)
-│   └── response/         # Payloads de saída (mapeados a partir das entidades)
-│
-├── security/             # Infraestrutura JWT
-│   ├── SecurityConfig    # Regras de autorização e CORS
-│   ├── JwtUtil           # Geração, validação e extração de claims
-│   └── JwtAuthFilter     # Filtro stateless injetado no filter chain
-│
-└── exception/            # Tratamento centralizado
-    ├── GlobalExceptionHandler
-    ├── RegraDeNegocioException
-    ├── RecursoNaoEncontradoException
-    └── RecursoJaExisteException
+
+### 2. Subir o banco de dados
+
+```bash
+docker compose up -d
 ```
+
+### 3. Subir a aplicação
+
+```bash
+mvn spring-boot:run
+```
+
+> O Flyway executa automaticamente as migrações `V1__create_tables.sql` e `V2__seed_data.sql`
+> na primeira inicialização. Não é necessário rodar scripts SQL manualmente.
+
+A aplicação estará disponível em `http://localhost:8080`.
 
 ---
 
-## Modelo de Domínio
+## Migrações — Flyway
+
+O schema é gerenciado pelo Flyway. Os scripts estão em:
 
 ```
-Usuario (ADMIN | GESTOR | FISCAL)
-    │
-    └──> realiza ──> Vistoria
-                         │ pertence a
-                         ▼
-                       Obra
-                         │ contém
-                         ▼
-                        Item ──── classificado por ──── Classificacao (A | B | C)
-                         ▲
-                         │ registra resultado em
-                    LogFiscalizacao ──── originado de ──── OrigemDado
+src/main/resources/db/migration/
+├── V1__create_tables.sql   ← schema físico completo (7 tabelas)
+└── V2__seed_data.sql       ← dados de teste
 ```
 
-### Fluxo de status de Obra
+Para resetar o banco e reaplicar as migrações do zero:
 
+```bash
+docker exec -i sgf-db psql -U root -d sgf_db -c "
+DROP TABLE IF EXISTS log_fiscalizacao, vistoria, item, obra,
+usuario, origem_dado, classificacao, flyway_schema_history CASCADE;
+"
+# Reinicie a aplicação — o Flyway recria tudo automaticamente
 ```
-PLANEJADA ──► EM_ANDAMENTO ──► CONCLUIDA
-                   │
-                   └──► PARALISADA ──► EM_ANDAMENTO
-```
-
-### Fluxo de status de Item
-
-```
-PENDENTE ──► EM_VISTORIA ──► APROVADO
-                  │
-                  └──────────► REPROVADO
-```
-
-### Classificação de itens (critério de criticidade)
-
-| Classe | Critério |
-|---|---|
-| **A** | Alto impacto — comprometem estrutura ou segurança da obra |
-| **B** | Impacto intermediário — afetam funcionalidade sem risco imediato |
-| **C** | Baixo impacto — acabamento e itens estéticos |
-
----
-
-## Autenticação e Autorização
-
-### Estratégia
-
-O sistema usa **JWT stateless** (sem sessão HTTP). Cada requisição protegida deve enviar o token no header:
-
-```
-Authorization: Bearer <token>
-```
-
-O `JwtAuthFilter` intercepta todas as requisições, valida o token, extrai o email e o papel, e popula o `SecurityContext` com as authorities correspondentes.
-
-### Papéis e Permissões
-
-| Recurso | FISCAL | GESTOR | ADMIN |
-|---|:---:|:---:|:---:|
-| Listar obras, itens, vistorias, logs | ✅ | ✅ | ✅ |
-| Criar vistoria e log | ✅ | ✅ | ✅ |
-| Criar item | ✅ | ✅ | ✅ |
-| Alterar status de obra/item | ✅ | ✅ | ✅ |
-| Criar e editar obras | ❌ | ✅ | ✅ |
-| Editar item (descrição/classificação) | ❌ | ✅ | ✅ |
-| Deletar item | ❌ | ✅ | ✅ |
-| Deletar obra | ❌ | ❌ | ✅ |
-| Gerenciar usuários (CRUD) | ❌ | ❌ | ✅ |
-
-### Tokens JWT
-
-- **Algoritmo:** HMAC-SHA256
-- **Expiração padrão:** 24 horas (configurável via `JWT_EXPIRACAO_MS`)
-- **Claims:** `sub` (email), `papel`, `iat`, `exp`
-- **Segredo:** configurado via variável de ambiente `JWT_SECRET` (mínimo 32 caracteres)
 
 ---
 
 ## Endpoints da API
 
-### Auth — `/auth`
-
-| Método | Endpoint | Auth | Descrição |
-|---|---|---|---|
-| `POST` | `/auth/login` | ❌ Público | Autentica e retorna JWT |
-| `POST` | `/auth/definir-senha/{id}` | ❌ Público | Define senha inicial para usuário seed |
-| `GET` | `/auth/me` | ✅ JWT | Retorna dados do usuário autenticado |
-
-**Login — request:**
-```json
-POST /auth/login
-{
-  "email": "admin@sgf.br",
-  "senha": "suasenha123"
-}
-```
-
-**Login — response:**
-```json
-{
-  "token": "eyJhbGciOiJIUzI1NiJ9...",
-  "id": "uuid-do-usuario",
-  "nome": "Admin SGF",
-  "email": "admin@sgf.br",
-  "papel": "ADMIN"
-}
-```
-
----
-
-### Obras — `/obras`
-
-| Método | Endpoint | Role mínima | Descrição |
-|---|---|---|---|
-| `GET` | `/obras` | FISCAL | Lista todas as obras |
-| `GET` | `/obras/buscar?q=&status=` | FISCAL | Busca com filtro por texto e/ou status |
-| `GET` | `/obras/{id}` | FISCAL | Busca obra por ID |
-| `GET` | `/obras/{id}/dashboard` | FISCAL | KPIs e métricas da obra |
-| `GET` | `/obras/{id}/timeline` | FISCAL | Linha do tempo de vistorias agrupadas por dia |
-| `POST` | `/obras` | GESTOR | Cria nova obra |
-| `PUT` | `/obras/{id}` | GESTOR | Atualiza dados da obra (sem alterar status) |
-| `PATCH` | `/obras/{id}/status` | FISCAL | Altera status da obra conforme fluxo permitido |
-| `DELETE` | `/obras/{id}` | ADMIN | Remove obra (bloqueado se tiver itens vinculados) |
-
-**Criar/Atualizar Obra — request:**
-```json
-{
-  "codigo": "OBR-2025-001",
-  "descricao": "Construção de escola municipal no bairro Itapuã",
-  "dataInicio": "2025-01-15",
-  "dataPrevisaoConclusao": "2025-12-31"
-}
-```
-
----
-
-### Itens — `/itens`
-
-| Método | Endpoint | Role mínima | Descrição |
-|---|---|---|---|
-| `GET` | `/itens` | FISCAL | Lista todos os itens |
-| `GET` | `/itens/buscar?obraId=&status=` | FISCAL | Filtra itens por obra e/ou status |
-| `GET` | `/itens/{id}` | FISCAL | Busca item por ID |
-| `POST` | `/itens` | FISCAL | Cria novo item vinculado a uma obra |
-| `PUT` | `/itens/{id}` | GESTOR | Atualiza classificação e descrição do item |
-| `PATCH` | `/itens/{id}/status` | FISCAL | Atualiza status do item |
-| `DELETE` | `/itens/{id}` | GESTOR | Remove item |
-
-**Criar Item — request:**
-```json
-{
-  "obraId": "uuid-da-obra",
-  "classificacaoId": "uuid-da-classificacao",
-  "descricao": "Fundação e estrutura de concreto"
-}
-```
-
-**Atualizar Item — request (PUT):**
-```json
-{
-  "classificacaoId": "uuid-da-classificacao",
-  "descricao": "Descrição atualizada do item"
-}
-```
-
----
-
-### Vistorias — `/vistorias`
-
-| Método | Endpoint | Role mínima | Descrição |
-|---|---|---|---|
-| `GET` | `/vistorias` | FISCAL | Lista todas as vistorias |
-| `GET` | `/vistorias/{id}` | FISCAL | Busca vistoria por ID |
-| `POST` | `/vistorias` | FISCAL | Registra nova vistoria |
-
-> Vistorias são registros de auditoria — **não possuem DELETE nem PUT** por design. O histórico é imutável.
-
-**Criar Vistoria — request:**
-```json
-{
-  "obraId": "uuid-da-obra",
-  "usuarioId": "uuid-do-fiscal",
-  "dataHora": "2025-05-06T09:00:00",
-  "observacoes": "Estrutura em conformidade com o projeto."
-}
-```
-
----
-
-### Logs de Fiscalização — `/logs`
-
-| Método | Endpoint | Role mínima | Descrição |
-|---|---|---|---|
-| `GET` | `/logs` | FISCAL | Lista todos os logs |
-| `POST` | `/logs` | FISCAL | Registra resultado de um item em uma vistoria |
-
-> Logs também são append-only — sem DELETE por design.
-
-**Criar Log — request:**
-```json
-{
-  "vistoriaId": "uuid-da-vistoria",
-  "itemId": "uuid-do-item",
-  "origemDadoId": "uuid-da-origem",
-  "resultado": "Item inspecionado. Estrutura dentro dos parâmetros técnicos.",
-  "statusItem": "APROVADO"
-}
-```
-
----
-
-### Usuários — `/usuarios`
-
-| Método | Endpoint | Role mínima | Descrição |
-|---|---|---|---|
-| `GET` | `/usuarios` | FISCAL | Lista todos os usuários |
-| `GET` | `/usuarios/papeis` | FISCAL | Lista os papéis disponíveis |
-| `GET` | `/usuarios/{id}` | FISCAL | Busca usuário por ID |
-| `POST` | `/usuarios` | ADMIN | Cria novo usuário |
-| `PUT` | `/usuarios/{id}` | ADMIN | Atualiza dados do usuário |
-| `PATCH` | `/usuarios/{id}/papel` | ADMIN | Altera o papel do usuário |
-| `DELETE` | `/usuarios/{id}?forcar=false` | ADMIN | Remove usuário. `forcar=true` desvincula vistorias antes de deletar. |
-
-**Criar Usuário — request:**
-```json
-{
-  "nome": "João Silva",
-  "email": "joao.silva@prefeitura.gov.br",
-  "papel": "FISCAL"
-}
-```
-
-> Após criar o usuário, defina a senha via `POST /auth/definir-senha/{id}`.
-
----
-
-### Classificações — `/classificacoes`
-
-| Método | Endpoint | Auth | Descrição |
-|---|---|---|---|
-| `GET` | `/classificacoes` | ❌ Público | Lista as classificações (A, B, C) |
-| `GET` | `/classificacoes/{id}` | ❌ Público | Busca classificação por ID |
-
----
-
-### Origens de Dado — `/origens-dado`
-
-| Método | Endpoint | Auth | Descrição |
-|---|---|---|---|
-| `GET` | `/origens-dado` | ❌ Público | Lista as origens de dado disponíveis |
-| `GET` | `/origens-dado/{id}` | ❌ Público | Busca origem por ID |
-
----
-
-## Migrações Flyway
-
-As migrações são executadas automaticamente na inicialização e seguem versionamento sequencial. Nunca edite uma migration já aplicada em produção — crie uma nova versão.
-
-| Versão | Arquivo | Descrição |
-|---|---|---|
-| V1 | `V1__create_tables.sql` | DDL completo: todas as tabelas, PKs, FKs e constraints |
-| V2 | `V2__seed_data.sql` | Dados iniciais: classificações, origens, usuários, obras e vistoria de exemplo |
-| V3 | `V3__add_indexes_and_constraints.sql` | Índices de performance (status, GIN full-text, compostos por obra) |
-| V4 | `V4__fix_vistoria_usuario_nullable.sql` | Permite `usuario_id` nullable na vistoria; recria FK com `ON DELETE SET NULL` |
-| V5 | `V5__add_auth_to_usuario.sql` | Adiciona coluna `senha_hash` (BCrypt) à tabela `usuario` |
-
-### Tabelas do banco
-
-| Tabela | Descrição |
-|---|---|
-| `usuario` | Usuários do sistema com papel (ADMIN, GESTOR, FISCAL) e hash da senha |
-| `obra` | Obras fiscalizadas com código único e controle de status |
-| `item` | Itens de uma obra classificados por criticidade |
-| `classificacao` | Lookup de classes A, B, C com critério descritivo |
-| `vistoria` | Registro de uma visita de fiscalização a uma obra |
-| `log_fiscalizacao` | Resultado individual de um item em uma vistoria |
-| `origem_dado` | Lookup do tipo de evidência usada no log (medição, foto, parecer, etc.) |
-
----
-
-## Configuração e Variáveis de Ambiente
-
-Todas as variáveis possuem valor padrão para desenvolvimento local. **Em produção, sempre sobrescreva via variável de ambiente.**
-
-| Variável | Padrão (dev) | Descrição |
-|---|---|---|
-| `DB_HOST` | `localhost` | Host do PostgreSQL |
-| `DB_PORT` | `5432` | Porta do PostgreSQL |
-| `DB_NAME` | `sgf_db` | Nome do banco de dados |
-| `DB_USER` | `root` | Usuário do banco |
-| `DB_PASSWORD` | `root` | Senha do banco |
-| `APP_PORT` | `8080` | Porta da aplicação |
-| `JWT_SECRET` | `sgf-default-dev-secret-...` | Segredo HMAC-SHA256 — **mínimo 32 caracteres em produção** |
-| `JWT_EXPIRACAO_MS` | `86400000` | Expiração do token em ms (padrão: 24h) |
-
-> ⚠️ **Nunca commite o valor real de `JWT_SECRET` no repositório.** Use variáveis de ambiente, `.env` no `.gitignore`, ou um serviço de secrets (AWS Secrets Manager, HashiCorp Vault).
-
----
-
-## Como Executar
-
-### Pré-requisitos
-
-- Java 21+
-- Maven 3.9+
-- PostgreSQL 16+ rodando localmente (ou via Docker)
-
-### 1. Banco de dados
-
-```bash
-# Opção rápida com Docker
-docker run -d \
-  --name sgf-db \
-  -e POSTGRES_DB=sgf_db \
-  -e POSTGRES_USER=root \
-  -e POSTGRES_PASSWORD=root \
-  -p 5432:5432 \
-  postgres:16
-```
-
-### 2. Clonar e configurar
-
-```bash
-git clone https://github.com/seu-usuario/sgf-backend.git
-cd sgf-backend
-```
-
-Para sobrescrever configurações sem alterar o `application.yaml`, crie um `application-local.yaml` em `src/main/resources/` (já está no `.gitignore`):
-
-```yaml
-sgf:
-  jwt:
-    secret: meu-segredo-local-de-desenvolvimento-seguro-32chars
-```
-
-### 3. Executar
-
-```bash
-./mvnw spring-boot:run
-```
-
-As migrações Flyway são aplicadas automaticamente. A API estará disponível em `http://localhost:8080`.
-
-### 4. Build para produção
-
-```bash
-./mvnw clean package -DskipTests
-java -jar target/sgf-backend-*.jar \
-  --spring.datasource.url=jdbc:postgresql://prod-host:5432/sgf_db \
-  --JWT_SECRET=segredo-de-producao-seguro
-```
-
----
-
-## Primeiros Passos Após o Deploy
-
-Os usuários criados pelo seed (V2) não possuem senha definida. Siga o fluxo abaixo para o primeiro acesso:
-
-### Passo 1 — Descubra os UUIDs dos usuários seed
-
-```bash
-GET /usuarios
-# Retorna a lista com os UUIDs de Carlos Andrade, Marina Costa e Admin SGF
-```
-
-### Passo 2 — Defina a senha de cada usuário
-
-```bash
-POST /auth/definir-senha/{uuid-do-admin}
-Content-Type: application/json
-
-{
-  "senha": "suasenha123"
-}
-```
-
-### Passo 3 — Faça login
-
-```bash
-POST /auth/login
-Content-Type: application/json
-
-{
-  "email": "admin@sgf.br",
-  "senha": "suasenha123"
-}
-```
-
-O response retorna o `token` JWT. Use-o em todas as próximas requisições:
-
-```
-Authorization: Bearer eyJhbGciOiJIUzI1NiJ9...
-```
-
-### Usuários seed disponíveis
-
-| Nome | Email | Papel |
-|---|---|---|
-| Admin SGF | `admin@sgf.br` | ADMIN |
-| Marina Costa | `marina.costa@ucsal.br` | GESTOR |
-| Carlos Andrade | `carlos.andrade@ucsal.br` | FISCAL |
-
----
-
-## Regras de Negócio
-
 ### Obras
 
-- O `codigo` da obra é único em todo o sistema.
-- `dataPrevisaoConclusao` não pode ser anterior a `dataInicio`.
-- Uma obra não pode ser deletada se possuir itens vinculados.
-- Transições de status são unidirecionais e controladas: `PLANEJADA → EM_ANDAMENTO → CONCLUIDA` (com possibilidade de `PARALISADA` a partir de `EM_ANDAMENTO`).
+| Método | Rota | Descrição |
+|--------|------|-----------|
+| GET | `/obras` | Lista todas as obras |
+| GET | `/obras/{id}` | Busca obra por ID |
+| GET | `/obras/{id}/dashboard` | Retorna agregação ABC + status da obra |
+| POST | `/obras` | Cria nova obra |
+| DELETE | `/obras/{id}` | Remove obra por ID |
 
-### Usuários
+### Itens
 
-- Um usuário com vistorias registradas **não pode ser removido** sem usar `?forcar=true`.
-- Com `forcar=true`, as vistorias são preservadas no histórico mas o campo `usuario_id` é definido como `NULL` (fiscal exibido como "Fiscal desvinculado" no frontend).
-- Exclusividade de email é garantida por constraint única no banco.
+| Método | Rota | Descrição |
+|--------|------|-----------|
+| GET | `/itens?obraId={id}` | Lista itens de uma obra |
+| GET | `/itens?obraId={id}&classificacao={A\|B\|C}` | Filtra itens por classificação ABC |
+| GET | `/itens/{id}` | Busca item por ID |
+| POST | `/itens` | Cria novo item |
+| DELETE | `/itens/{id}` | Remove item por ID |
 
-### Vistorias e Logs
+### Vistorias
 
-- Vistorias e logs são registros de auditoria — não há endpoints de DELETE nem de UPDATE por design. O histórico é imutável.
-- Um log de fiscalização deve referenciar um item que pertença à mesma obra da vistoria.
+| Método | Rota | Descrição |
+|--------|------|-----------|
+| GET | `/vistorias?obraId={id}` | Lista vistorias de uma obra |
+| GET | `/vistorias/{id}` | Busca vistoria por ID |
+| POST | `/vistorias` | Registra nova vistoria |
+
+### Logs de Fiscalização
+
+| Método | Rota | Descrição |
+|--------|------|-----------|
+| GET | `/logs?vistoriaId={id}` | Lista logs de uma vistoria |
+| GET | `/logs?itemId={id}` | Lista histórico de um item |
+| POST | `/logs` | Registra novo log de fiscalização |
+
+---
+
+## Exemplo — Dashboard de Obra
+
+```bash
+curl http://localhost:8080/obras/a1b2c3d4-0001-0001-0001-000000000001/dashboard
+```
+
+```json
+{
+  "obraId": "a1b2c3d4-0001-0001-0001-000000000001",
+  "codigo": "OBR-2024-001",
+  "descricao": "Construção de escola municipal no bairro Itapuã",
+  "statusObra": "EM_ANDAMENTO",
+  "totalItens": 7,
+  "aprovados": 0,
+  "reprovados": 0,
+  "emVistoria": 2,
+  "pendentes": 5,
+  "itensClasseA": 3,
+  "itensClasseB": 2,
+  "itensClasseC": 2
+}
+```
+
+---
+
+## Estrutura do Projeto
+
+```
+sgf-backend/
+├── src/main/resources/
+│   └── db/migration/
+│       ├── V1__create_tables.sql
+│       └── V2__seed_data.sql
+└── src/main/java/br/leetjourney/sgf_backend/
+    ├── config/                    # CorsConfig
+    ├── controller/                # ObraController, ItemController,
+    │                              # VistoriaController, LogFiscalizacaoController
+    ├── dto/
+    │   ├── request/               # DTOs de entrada (Bean Validation)
+    │   └── response/              # DTOs de saída (Java Records)
+    ├── exception/                 # RecursoNaoEncontradoException
+    │                              # GlobalExceptionHandler
+    ├── model/                     # Entidades JPA
+    ├── repository/                # Repositórios Spring Data
+    ├── service/                   # Regras de negócio
+    └── SgfBackendApplication.java
+```
+
+---
+
+## Modelo de Dados
+
+```
+OBRA (1:N) ITEM
+OBRA (1:N) VISTORIA
+USUARIO (1:N) VISTORIA
+VISTORIA (1:N) LOG_FISCALIZACAO
+ITEM (1:N) LOG_FISCALIZACAO   ← tabela associativa N:N Vistoria × Item
+ITEM (N:1) CLASSIFICACAO      ← tipo CHAR: A | B | C
+LOG_FISCALIZACAO (N:1) ORIGEM_DADO
+```
+
+### Tabelas
+
+| Tabela | Descrição |
+|--------|-----------|
+| `obra` | Unidade central de fiscalização |
+| `item` | Elemento fiscalizado dentro de uma obra |
+| `classificacao` | Critério ABC de criticidade (A, B, C) |
+| `vistoria` | Evento de inspeção com fiscal responsável |
+| `log_fiscalizacao` | Registro imutável do estado do item na vistoria |
+| `origem_dado` | Fonte do registro (campo, fotografia, cronograma, parecer) |
+| `usuario` | Fiscal ou gestor responsável |
 
 ---
 
 ## Decisões Arquiteturais
 
-**Por que JWT stateless?**
-Elimina a necessidade de armazenar sessões no servidor, facilitando a escalabilidade horizontal. Em um sistema de fiscalização pública com múltiplos fiscais em campo acessando simultaneamente, a ausência de estado no servidor é um benefício direto.
-
-**Por que Flyway e não `ddl-auto: update`?**
-`ddl-auto: update` é não-determinístico em produção — pode deixar colunas obsoletas, não remove constraints e não há rollback. Flyway garante rastreabilidade, versionamento e execução idempotente de cada mudança de schema, o que é obrigatório em sistemas com dados reais.
-
-**Por que `ON DELETE SET NULL` na FK `vistoria.usuario_id`?**
-Fiscais são desligados, mas o histórico de vistorias que realizaram não deve ser apagado. A escolha de `SET NULL` em vez de `CASCADE` preserva a integridade do histórico de auditoria enquanto permite a remoção do usuário sem cascatear deletes para registros de vistoria.
-
-**Por que separar DTO de Entidade?**
-Entidades JPA são gerenciadas pelo contexto de persistência e não devem vazar para a camada HTTP. DTOs de request carregam validação (`@Valid`) e DTOs de response controlam exatamente o que é serializado — evitando campos internos como `senhaHash` na resposta da API.
-
-**Por que `GlobalExceptionHandler` centralizado?**
-Garante respostas de erro consistentes em toda a API. Sem ele, exceções não tratadas retornam stack traces em JSON ou HTML padrão do Spring, o que é inseguro e inconsistente para o cliente.
+| Decisão | Justificativa |
+|---------|--------------|
+| UUID como PK | Evita colisão em ambiente distribuído; não expõe sequência na API |
+| Flyway para migrations | Schema versionado e reproduzível; elimina execução manual de scripts |
+| `ddl-auto: validate` | Hibernate apenas valida o schema — Flyway é o único responsável por alterações |
+| `CLASSIFICACAO` como entidade separada | Permite versionar critérios ABC sem alterar os itens |
+| `LOG_FISCALIZACAO` com `status_item` próprio | Captura o estado do item no momento da vistoria (histórico longitudinal) |
+| `USUARIO` vinculado à `VISTORIA` | Rastreabilidade no nível do evento de inspeção |
+| `FetchType.LAZY` + `@Transactional(readOnly = true)` | Evita carregamento desnecessário; sessão mantida aberta durante mapeamento para DTO |
+| `open-in-view: false` | Elimina queries lazy fora do contexto transacional |
+| Java Records para DTOs | Imutabilidade e ausência de boilerplate |
 
 ---
 
-## Namespace
+## Tratamento de Erros
 
-`br.leetjourney` · PROVIC · UCSAL · SGF v5.0
+Todas as respostas de erro seguem o padrão JSON:
+
+```json
+{
+  "status": 404,
+  "mensagem": "Obra não encontrada: 00000000-0000-0000-0000-000000000000",
+  "timestamp": "2026-04-18T15:35:45"
+}
+```
+
+| Código | Situação |
+|--------|----------|
+| 400 | Parâmetro inválido, body ausente ou falha de validação |
+| 404 | Recurso não encontrado |
+| 500 | Erro interno do servidor |
+
+---
+
+## Padrão de Commits
+
+```
+feat(obra): adiciona endpoint de listagem
+fix(item): corrige filtro por classificacao
+docs(readme): atualiza documentacao de endpoints
+refactor(service): extrai logica ABC para metodo privado
+chore(flyway): adiciona migracao V3 com índices
+```
+
+---
+
+## Status do Projeto
+
+| Sprint | Foco | Status |
+|--------|------|--------|
+| S1 | Domínio e backlog | ✅ Concluída |
+| S2 | Setup Spring Boot | ✅ Concluída |
+| S3 | Esquema físico SQL | ✅ Concluída |
+| S4 | Serviço e regras de negócio | ✅ Concluída |
+| S5 | DTOs e filtros de API | ✅ Concluída |
+| S6 | Validação e exceções | ✅ Concluída |
+| S7 | Integração com dashboard | ✅ Concluída |
+| S8 | Consolidação de IC | ✅ Concluída |
+| Pós-S8 | Flyway + correções de integração | ✅ Concluída |
+
+---
+
+*SGF — PROVIC/UCSAL | Orientador: Prof. Eng. Me. Rafael Bispo*

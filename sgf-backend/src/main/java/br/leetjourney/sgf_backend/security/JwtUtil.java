@@ -35,11 +35,12 @@ public class JwtUtil {
         this.expiracaoMs = expiracaoMs;
     }
 
-    /** Gera um token JWT para o email + papel informados. */
+    /** Gera um token JWT para o email + papel informados. Inclui jti para rastreabilidade. */
     public String gerar(String email, String papel) {
         return Jwts.builder()
                 .subject(email)
                 .claim("papel", papel)
+                .id(java.util.UUID.randomUUID().toString())  // jti — identificador único do token
                 .issuedAt(new Date())
                 .expiration(new Date(System.currentTimeMillis() + expiracaoMs))
                 .signWith(secretKey)

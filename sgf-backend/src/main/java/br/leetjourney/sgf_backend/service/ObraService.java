@@ -14,9 +14,14 @@ import br.leetjourney.sgf_backend.model.StatusItem;
 import br.leetjourney.sgf_backend.model.StatusObra;
 import br.leetjourney.sgf_backend.repository.ItemRepository;
 import br.leetjourney.sgf_backend.repository.ObraRepository;
+import br.leetjourney.sgf_backend.repository.UsuarioRepository;
 import br.leetjourney.sgf_backend.repository.VistoriaRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import br.leetjourney.sgf_backend.model.AuditLog;
+import br.leetjourney.sgf_backend.service.AuditService;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -46,13 +51,19 @@ public class ObraService {
     private final ObraRepository     obraRepository;
     private final ItemRepository     itemRepository;
     private final VistoriaRepository vistoriaRepository;
+    private final AuditService       auditService;
+    private final UsuarioRepository  usuarioRepository;
 
     public ObraService(ObraRepository obraRepository,
                        ItemRepository itemRepository,
-                       VistoriaRepository vistoriaRepository) {
+                       VistoriaRepository vistoriaRepository,
+                       AuditService auditService,
+                       UsuarioRepository usuarioRepository) {
         this.obraRepository     = obraRepository;
         this.itemRepository     = itemRepository;
         this.vistoriaRepository = vistoriaRepository;
+        this.auditService       = auditService;
+        this.usuarioRepository  = usuarioRepository;
     }
 
     // ── Listagem com filtros ──────────────────────────────────────────────────
@@ -129,6 +140,7 @@ public class ObraService {
     // ── Criação ───────────────────────────────────────────────────────────────
 
     @Transactional
+    @PreAuthorize("hasAnyRole('ADMIN','GESTOR')")
     public ObraResponseDTO salvar(ObraRequestDTO dto) {
         if (obraRepository.existsByCodigo(dto.codigo())) {
             throw new RecursoJaExisteException("Já existe uma obra com o código: " + dto.codigo());
@@ -143,21 +155,32 @@ public class ObraService {
         obra.setDescricao(dto.descricao());
         obra.setDataInicio(dto.dataInicio());
         obra.setDataPrevisaoConclusao(dto.dataPrevisaoConclusao());
-        obra.setStatus(dto.status());
-        log.info("Criando obra: {}", dto.codigo());
-        return ObraResponseDTO.from(obraRepository.save(obra));
+        // CORREÇÃO: status inicial sempre PLANEJADA — nunca vem do DTO.
+        // Antes, o cliente podia criar obras diretamente com status CONCLUIDA,
+        // bypassando toda a máquina de estados.
+        obra.setStatus(StatusObra.PLANEJADA);
+
+        Obra salva = obraRepository.save(obra);
+        log.info("Obra criada: {} ({})", salva.getCodigo(), salva.getId());
+
+        UUID usuarioId = resolverUsuarioId();
+        auditService.registrar(AuditLog.Acao.CREATE, "Obra", salva.getId(), usuarioId,
+                "Obra criada: " + salva.getCodigo());
+
+        return ObraResponseDTO.from(salva);
     }
 
     // ── Atualização de status (PATCH) ─────────────────────────────────────────
 
     @Transactional
+    @PreAuthorize("hasAnyRole('ADMIN','GESTOR','FISCAL')")
     public ObraResponseDTO atualizarStatus(UUID id, AtualizarStatusObraDTO dto) {
         Obra obra = buscarEntidade(id);
         StatusObra atual = obra.getStatus();
         StatusObra novo  = dto.status();
 
         if (atual == novo) {
-            return ObraResponseDTO.from(obra); // idempotente — sem alteração
+            return ObraResponseDTO.from(obra);
         }
 
         Set<StatusObra> permitidos = TRANSICOES_VALIDAS.getOrDefault(atual, Set.of());
@@ -168,13 +191,20 @@ public class ObraService {
         }
 
         obra.setStatus(novo);
+        Obra salva = obraRepository.save(obra);
         log.info("Status da obra {} atualizado: {} → {}", obra.getCodigo(), atual, novo);
-        return ObraResponseDTO.from(obraRepository.save(obra));
+
+        UUID usuarioId = resolverUsuarioId();
+        auditService.registrar(AuditLog.Acao.PATCH, "Obra", salva.getId(), usuarioId,
+                "Status alterado: " + atual + " → " + novo + " na obra " + salva.getCodigo());
+
+        return ObraResponseDTO.from(salva);
     }
 
     // ── Exclusão ──────────────────────────────────────────────────────────────
 
     @Transactional
+    @PreAuthorize("hasRole('ADMIN')")
     public void deletar(UUID id) {
         Obra obra = buscarEntidade(id);
         if (obra.getStatus() == StatusObra.EM_ANDAMENTO) {
@@ -182,45 +212,39 @@ public class ObraService {
                     "Não é permitido excluir uma obra com status EM_ANDAMENTO.");
         }
         log.info("Deletando obra: {} ({})", obra.getCodigo(), id);
+        UUID usuarioId = resolverUsuarioId();
+        auditService.registrar(AuditLog.Acao.DELETE, "Obra", obra.getId(), usuarioId,
+                "Obra deletada: " + obra.getCodigo());
         obraRepository.deleteById(id);
     }
 
-    // ── Dashboard ─────────────────────────────────────────────────────────────
+    // ── Dashboard — contagens via SQL (não mais em memória) ───────────────────
 
     @Transactional(readOnly = true)
     public DashboardObraDTO gerarDashboard(UUID obraId) {
         Obra obra = buscarEntidade(obraId);
-        List<Item> itens = itemRepository.findByObraIdComClassificacao(obraId);
 
-        long totalItens   = itens.size();
-        long aprovados    = contarPorStatus(itens, StatusItem.APROVADO);
-        long reprovados   = contarPorStatus(itens, StatusItem.REPROVADO);
-        long emVistoria   = contarPorStatus(itens, StatusItem.EM_VISTORIA);
-        long pendentes    = contarPorStatus(itens, StatusItem.PENDENTE);
-        long itensClasseA = contarPorClasse(itens, 'A');
-        long itensClasseB = contarPorClasse(itens, 'B');
-        long itensClasseC = contarPorClasse(itens, 'C');
+        // CORREÇÃO: contagens delegadas ao banco via countByObraIdAndStatus —
+        // elimina o carregamento de todos os itens em memória apenas para contar.
+        long totalItens   = itemRepository.countByObraId(obraId);
+        long aprovados    = itemRepository.countByObraIdAndStatus(obraId, StatusItem.APROVADO);
+        long reprovados   = itemRepository.countByObraIdAndStatus(obraId, StatusItem.REPROVADO);
+        long emVistoria   = itemRepository.countByObraIdAndStatus(obraId, StatusItem.EM_VISTORIA);
+        long pendentes    = itemRepository.countByObraIdAndStatus(obraId, StatusItem.PENDENTE);
+        long itensClasseA = itemRepository.countByObraIdAndClassificacaoTipo(obraId, 'A');
+        long itensClasseB = itemRepository.countByObraIdAndClassificacaoTipo(obraId, 'B');
+        long itensClasseC = itemRepository.countByObraIdAndClassificacaoTipo(obraId, 'C');
         int  pctAprovacao = totalItens > 0 ? (int) Math.round((aprovados * 100.0) / totalItens) : 0;
 
         log.info("Dashboard gerado para obra: {} | total={} aprovados={} pct={}%",
                 obra.getCodigo(), totalItens, aprovados, pctAprovacao);
 
         return new DashboardObraDTO(
-                obra.getId(),
-                obra.getCodigo(),
-                obra.getDescricao(),
+                obra.getId(), obra.getCodigo(), obra.getDescricao(),
                 obra.getStatus() != null ? obra.getStatus().name() : null,
-                obra.getDataInicio(),
-                obra.getDataPrevisaoConclusao(),
-                totalItens,
-                aprovados,
-                reprovados,
-                emVistoria,
-                pendentes,
-                itensClasseA,
-                itensClasseB,
-                itensClasseC,
-                pctAprovacao
+                obra.getDataInicio(), obra.getDataPrevisaoConclusao(),
+                totalItens, aprovados, reprovados, emVistoria, pendentes,
+                itensClasseA, itensClasseB, itensClasseC, pctAprovacao
         );
     }
 
@@ -228,7 +252,7 @@ public class ObraService {
 
     @Transactional(readOnly = true)
     public List<VistoriaTimelineDTO> timelineVistorias(UUID obraId) {
-        buscarEntidade(obraId); // garante que a obra existe
+        buscarEntidade(obraId);
         return vistoriaRepository.contarPorDia(obraId)
                 .stream()
                 .map(row -> new VistoriaTimelineDTO(
@@ -240,15 +264,18 @@ public class ObraService {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private long contarPorStatus(List<Item> itens, StatusItem status) {
-        return itens.stream().filter(i -> status == i.getStatus()).count();
-    }
-
-    private long contarPorClasse(List<Item> itens, char tipo) {
-        return itens.stream()
-                .filter(i -> i.getClassificacao() != null
-                             && tipo == i.getClassificacao().getTipo())
-                .count();
+    /** Extrai o UUID do usuário autenticado do SecurityContext via email. */
+    private UUID resolverUsuarioId() {
+        try {
+            var auth = SecurityContextHolder.getContext().getAuthentication();
+            if (auth == null || !auth.isAuthenticated()) return null;
+            String email = (String) auth.getPrincipal();
+            return usuarioRepository.findByEmail(email)
+                    .map(u -> u.getId())
+                    .orElse(null);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private Obra buscarEntidade(UUID id) {

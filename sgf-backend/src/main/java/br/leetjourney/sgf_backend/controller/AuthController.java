@@ -7,20 +7,25 @@ import br.leetjourney.sgf_backend.dto.response.UsuarioResponseDTO;
 import br.leetjourney.sgf_backend.service.AuthService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
 
 /**
- * Controller de autenticação.
+ * Controller de autenticação — v6.0
  *
- * Endpoints públicos (sem JWT):
- *   POST /auth/login           → autentica e retorna token JWT
- *   POST /auth/definir-senha   → define senha inicial para usuários seed
+ * CORREÇÃO v6 (auditoria crítica):
+ * - POST /auth/definir-senha/{id} agora exige autenticação como ADMIN.
+ *   Na v5, este endpoint era público — qualquer pessoa podia redefinir
+ *   a senha de qualquer usuário, incluindo o Admin, sem autenticação.
  *
- * Endpoint protegido (exige JWT):
- *   GET  /auth/me              → retorna dados do usuário autenticado
+ * Endpoints:
+ *   POST /auth/login                     → público — autentica e retorna JWT
+ *   POST /auth/definir-senha/{id}        → ADMIN only — define/redefine senha
+ *   POST /auth/alterar-minha-senha       → autenticado — usuário altera a própria senha
+ *   GET  /auth/me                        → autenticado — dados do usuário logado
  */
 @RestController
 @RequestMapping("/auth")
@@ -33,10 +38,8 @@ public class AuthController {
     }
 
     /**
-     * POST /auth/login
-     *
-     * Body: { "email": "admin@sgf.gov.br", "senha": "senha123" }
-     * Retorna: { "token": "...", "id": "...", "nome": "...", "email": "...", "papel": "ADMIN" }
+     * POST /auth/login — público
+     * Sujeito a rate limiting por IP (RateLimitFilter: 10 tentativas/60s).
      */
     @PostMapping("/login")
     public ResponseEntity<LoginResponseDTO> login(@Valid @RequestBody LoginRequestDTO dto) {
@@ -44,31 +47,47 @@ public class AuthController {
     }
 
     /**
-     * POST /auth/definir-senha/{id}
+     * POST /auth/definir-senha/{id} — ADMIN only
      *
-     * Define ou redefine a senha de um usuário pelo UUID.
-     * Usado no setup inicial dos usuários seed (que não possuem senha).
+     * CORREÇÃO v6: era público na v5, permitindo que qualquer pessoa redefinisse
+     * a senha de qualquer usuário. Agora exige ADMIN via @PreAuthorize.
      *
-     * Body: { "senha": "minhasenha123" }
+     * Uso: configuração inicial de usuários seed ou reset de senha por suporte.
      */
     @PostMapping("/definir-senha/{id}")
+    @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<Void> definirSenha(
             @PathVariable UUID id,
-            @Valid @RequestBody DefinirSenhaRequestDTO dto) {
-        authService.definirSenha(id, dto);
+            @Valid @RequestBody DefinirSenhaRequestDTO dto,
+            @AuthenticationPrincipal String adminEmail) {
+        authService.definirSenha(id, dto, adminEmail);
         return ResponseEntity.noContent().build();
     }
 
     /**
-     * GET /auth/me
+     * POST /auth/alterar-minha-senha — qualquer usuário autenticado
      *
-     * Retorna os dados do usuário autenticado.
-     * O email é extraído automaticamente do JWT pelo JwtAuthFilter
-     * e injetado via @AuthenticationPrincipal (o principal é o email/subject do token).
+     * Permite que o usuário altere a própria senha sem intervenção do Admin.
+     * Exige a senha atual para confirmar identidade.
      */
-    @GetMapping("/me")
-    public ResponseEntity<UsuarioResponseDTO> me(
+    @PostMapping("/alterar-minha-senha")
+    public ResponseEntity<Void> alterarMinhaSenha(
+            @Valid @RequestBody AlterarSenhaRequestDTO dto,
             @AuthenticationPrincipal String email) {
+        authService.alterarSenha(email, dto);
+        return ResponseEntity.noContent().build();
+    }
+
+    /** GET /auth/me — qualquer usuário autenticado */
+    @GetMapping("/me")
+    public ResponseEntity<UsuarioResponseDTO> me(@AuthenticationPrincipal String email) {
         return ResponseEntity.ok(authService.me(email));
     }
+
+    // ── DTO interno (evita criar arquivo separado para DTO simples) ───────────
+    public record AlterarSenhaRequestDTO(
+            @jakarta.validation.constraints.NotBlank String senhaAtual,
+            @jakarta.validation.constraints.NotBlank
+            @jakarta.validation.constraints.Size(min = 6, max = 100) String novaSenha
+    ) {}
 }

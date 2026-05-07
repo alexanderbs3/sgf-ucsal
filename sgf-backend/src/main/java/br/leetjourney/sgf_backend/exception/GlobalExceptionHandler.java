@@ -78,19 +78,53 @@ public class GlobalExceptionHandler {
     }
 
     // ── 422 — Violação de integridade referencial do banco ─────────────────────
+    //
+    // CORREÇÃO v6: a v5 verificava o nome da FK por string literal ("fk_vistoria_usuario"),
+    // o que era frágil — renomear a constraint em uma migration quebraria silenciosamente.
+    // Agora usamos o SQLState do PostgreSQL:
+    //   23503 = foreign_key_violation
+    //   23505 = unique_violation
+    // Estes códigos são estáveis e definidos pelo padrão SQL/PostgreSQL.
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<Map<String, Object>> handleIntegridade(DataIntegrityViolationException ex) {
-        String causa = ex.getMostSpecificCause().getMessage();
+        String causa   = ex.getMostSpecificCause().getMessage();
+        String sqlState = extrairSqlState(ex);
         String mensagem;
-        if (causa != null && causa.contains("fk_vistoria_usuario")) {
-            mensagem = "Este usuário possui vistorias vinculadas e não pode ser excluído.";
-        } else if (causa != null && causa.contains("fk_")) {
-            mensagem = "Operação bloqueada: existem registros dependentes vinculados a este recurso.";
+
+        if ("23503".equals(sqlState)) {
+            // FK violation — detecta a entidade pelo nome da tabela na mensagem
+            if (causa != null && causa.contains("vistoria")) {
+                mensagem = "Este usuário possui vistorias vinculadas e não pode ser excluído. "
+                         + "Use a opção de remoção forçada (Admin) para desvincular.";
+            } else if (causa != null && causa.contains("item")) {
+                mensagem = "Esta obra possui itens vinculados e não pode ser excluída.";
+            } else {
+                mensagem = "Operação bloqueada: existem registros dependentes vinculados a este recurso.";
+            }
+        } else if ("23505".equals(sqlState)) {
+            // Unique violation — a mensagem do Spring já trata isso via RecursoJaExisteException,
+            // mas mantemos aqui como fallback para constraints não verificadas antecipadamente.
+            mensagem = "Já existe um registro com os mesmos dados únicos (ex: e-mail ou código).";
         } else {
             mensagem = "Violação de integridade de dados.";
         }
-        log.warn("DataIntegrityViolation: {}", causa);
+
+        log.warn("DataIntegrityViolation [SQLState={}]: {}", sqlState, causa);
         return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(erro(422, mensagem));
+    }
+
+    /**
+     * Extrai o SQLState da cadeia de causas da exceção.
+     * O SQLState é um código de 5 dígitos definido pelo padrão SQL — mais estável
+     * que verificar nomes de constraints por string.
+     */
+    private String extrairSqlState(DataIntegrityViolationException ex) {
+        Throwable cause = ex.getMostSpecificCause();
+        // PSQLException implementa SQLException que expõe getSQLState()
+        if (cause instanceof java.sql.SQLException sqlEx) {
+            return sqlEx.getSQLState();
+        }
+        return null;
     }
 
     // ── 500 ──────────────────────────────────────────────────────────────────
